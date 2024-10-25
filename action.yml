@@ -1,5 +1,5 @@
 name: vcpkg-action
-description: Simple action to run vcpkg and cache results
+description: Action to run vcpkg and cache results with improvements
 inputs:
   pkgs:
     description: "List of packages to build, separated by spaces. Cannot be used with manifest-dir"
@@ -16,27 +16,30 @@ inputs:
   disable-cache:
     description: "Disable cache (useful for release builds)"
     required: false
-    default: 'false'
+    default: false
+    type: boolean
   revision:
     description: "vcpkg revision to checkout."
     required: false
     default: ''
   token:
-    description: "GitHub token to authenticate API requests. Recommended to use  github.token "
+    description: "GitHub token to authenticate API requests. Recommended to use github.token"
     required: false
     default: ''
   manifest-dir:
-    description: Directory containing vcpkg.json manifest file. Cannot be used with pkgs.
+    description: "Directory containing vcpkg.json manifest file. Cannot be used with pkgs."
     required: false
     default: ''
   github-binarycache:
     description: "Use vcpkg built-in GitHub binary caching. If not specified, will use the dry-run based file cache."
     required: false
-    default: ''
+    default: false
+    type: boolean
   fetch-depth:
     description: "Fetch depth for vcpkg checkout"
     required: false
-    default: "1"
+    default: 1
+    type: number
 outputs:
   vcpkg-cmake-config:
     description: Configure options for cmake to use vcpkg
@@ -46,142 +49,122 @@ outputs:
     value: ${{ steps.vcpkg-cmake-config.outputs.vcpkg-cache-hash }}
 runs:
   using: "composite"
+  env:
+    VCPKG_ROOT: ${{ github.workspace }}/vcpkg
   steps:
-  - name: Get latest Github release
-    uses: cardinalby/git-get-release-action@v1
-    id: get-latest-vcpkg-release
-    env:
-      GITHUB_TOKEN: ${{ inputs.token }}
-      VCPKG_ROOT: "${{ github.workspace }}/vcpkg"
-    with:
-      latest: true
-      repo: microsoft/vcpkg
-      prerelease: false
-      draft: false    
-  - name: Determine checkout tag
-    shell: bash
-    id: determine-checkout-revision
-    run: |
-      if [[ "${{ inputs.revision }}" != "" ]]; then
-        echo "vcpkg-revision=${{ inputs.revision }}" >> $GITHUB_OUTPUT
-      else
-        echo "vcpkg-revision=${{ steps.get-latest-vcpkg-release.outputs.tag_name }}" >> $GITHUB_OUTPUT
-      fi
-    env:
-      VCPKG_ROOT: "${{ github.workspace }}/vcpkg"
-  - name: checkout-vcpkg
-    uses: actions/checkout@v3
-    with:
-      path: ${{ github.workspace }}/vcpkg
-      repository: microsoft/vcpkg
-      ref: '${{ steps.determine-checkout-revision.outputs.vcpkg-revision }}'
-      fetch-depth: ${{ inputs.fetch-depth }}
-    env:
-      VCPKG_ROOT: "${{ github.workspace }}/vcpkg"
-  - name: bootstrap-vcpkg-win
-    if: runner.os == 'Windows'
-    working-directory: ${{ github.workspace }}\vcpkg
-    run: bootstrap-vcpkg.bat
-    shell: cmd
-    env:
-      VCPKG_ROOT: "${{ github.workspace }}/vcpkg"
-  - name: bootstrap-vcpkg-unix
-    if: runner.os != 'Windows'
-    working-directory: ${{ github.workspace }}/vcpkg
-    run: ./bootstrap-vcpkg.sh
-    shell: bash
-    env:
-      VCPKG_ROOT: "${{ github.workspace }}/vcpkg"
-  - name: set-binarycache-variable
-    if: inputs.github-binarycache != 'true' && inputs.github-binarycache != true
-    shell: bash
-    run: |
-      echo VCPKG_DEFAULT_BINARY_CACHE='${{ github.workspace }}/vcpkg_cache' >> $GITHUB_ENV
-      mkdir -p '${{ github.workspace }}/vcpkg_cache'
-  - name: vcpkg-dry-run-win
-    if: runner.os == 'Windows' && inputs.manifest-dir == '' && inputs.github-binarycache != 'true' && inputs.github-binarycache != true
-    working-directory: ${{ github.workspace }}\vcpkg
-    shell: powershell
-    run: |
-      & "${{ github.workspace }}/vcpkg/vcpkg.exe" install --dry-run --triplet ${{ inputs.triplet }} ${{ inputs.extra-args }} ${{ inputs.pkgs }} | Tee-Object -FilePath vcpkg_dry_run.txt
-    env:
-      VCPKG_ROOT: "${{ github.workspace }}/vcpkg"
-  - name: vcpkg-dry-run-unix
-    if: runner.os != 'Windows' && inputs.manifest-dir == '' && inputs.github-binarycache != 'true' && inputs.github-binarycache != true
-    working-directory: ${{ github.workspace }}/vcpkg
-    shell: bash
-    run: |
-      "${{ github.workspace }}/vcpkg/vcpkg" install --dry-run --triplet ${{ inputs.triplet }} ${{ inputs.extra-args }} ${{ inputs.pkgs }} | tee vcpkg_dry_run.txt
-    env:
-      VCPKG_ROOT: "${{ github.workspace }}/vcpkg"
-  - name: vcpkg-dry-run-win-manifest
-    if: runner.os == 'Windows' && inputs.manifest-dir != '' && inputs.github-binarycache != 'true' && inputs.github-binarycache != true
-    working-directory: ${{ github.workspace }}\vcpkg
-    shell: powershell
-    run: |
-      & "${{ github.workspace }}/vcpkg/vcpkg.exe" install --dry-run --triplet ${{ inputs.triplet }} ${{ inputs.extra-args }} --x-manifest-root=${{ inputs.manifest-dir }} --x-install-root=${{ github.workspace }}\vcpkg\installed | Tee-Object -FilePath vcpkg_dry_run.txt
-    env:
-      VCPKG_ROOT: "${{ github.workspace }}/vcpkg"
-  - name: vcpkg-dry-run-unix-manifest
-    if: runner.os != 'Windows' && inputs.manifest-dir != '' && inputs.github-binarycache != 'true' && inputs.github-binarycache != true
-    working-directory: ${{ github.workspace }}/vcpkg
-    shell: bash
-    run: |
-      "${{ github.workspace }}/vcpkg/vcpkg" install --dry-run --triplet ${{ inputs.triplet }} ${{ inputs.extra-args }} --x-manifest-root=${{ inputs.manifest-dir }} --x-install-root=${{ github.workspace }}/vcpkg/installed | tee vcpkg_dry_run.txt
-    env:
-      VCPKG_ROOT: "${{ github.workspace }}/vcpkg"
-  - name: cache-vcpkg-archives
-    if: ${{ inputs.disable_cache != 'true' }} && inputs.github-binarycache != 'true' && inputs.github-binarycache != true
-    id: cache-vcpkg-archives
-    uses: pat-s/always-upload-cache@v3
-    with:
-      path: ${{ github.workspace }}/vcpkg_cache
-      key: ${{ runner.os }}-${{ inputs.triplet }}-vcpkg-${{ hashFiles('vcpkg/vcpkg_dry_run.txt') }}-${{ inputs.cache-key }}
-    env:
-      VCPKG_ROOT: "${{ github.workspace }}/vcpkg"
-  - name: Export GitHub Actions cache environment variables
-    if: (inputs.disable_cache != 'true' && inputs.disable_cache != true) &&  (inputs.github-binarycache == 'true' || inputs.github-binarycache == true)
-    uses: actions/github-script@v6
-    with:
-      script: |
-        core.exportVariable('ACTIONS_CACHE_URL', process.env.ACTIONS_CACHE_URL || '');
-        core.exportVariable('ACTIONS_RUNTIME_TOKEN', process.env.ACTIONS_RUNTIME_TOKEN || '');
-        core.exportVariable('VCPKG_BINARY_SOURCES', "clear;x-gha,readwrite");
-  - name: build-vcpkg-win
-    if: runner.os == 'Windows' && inputs.manifest-dir == ''
-    shell: cmd
-    working-directory: ${{ github.workspace }}\vcpkg
-    run: |
-      "${{ github.workspace }}/vcpkg/vcpkg.exe" install --triplet ${{ inputs.triplet }} ${{ inputs.extra-args }} ${{ inputs.pkgs }}
-    env:
-      VCPKG_ROOT: "${{ github.workspace }}/vcpkg"
-  - name: build-vcpkg-unix
-    if: runner.os != 'Windows' && inputs.manifest-dir == ''
-    shell: bash
-    working-directory: ${{ github.workspace }}/vcpkg
-    run: |
-      "${{ github.workspace }}/vcpkg/vcpkg" install --triplet ${{ inputs.triplet }} ${{ inputs.extra-args }} ${{ inputs.pkgs }}
-    env:
-      VCPKG_ROOT: "${{ github.workspace }}/vcpkg"
-  - name: build-vcpkg-win
-    if: runner.os == 'Windows' && inputs.manifest-dir != ''
-    shell: cmd
-    working-directory: ${{ github.workspace }}\vcpkg
-    run: |
-      "${{ github.workspace }}/vcpkg/vcpkg.exe" install --triplet ${{ inputs.triplet }} ${{ inputs.extra-args }} --x-manifest-root=${{ inputs.manifest-dir }} --x-install-root=${{ github.workspace }}/vcpkg/installed
-    env:
-      VCPKG_ROOT: "${{ github.workspace }}/vcpkg"
-  - name: build-vcpkg-unix
-    if: runner.os != 'Windows' && inputs.manifest-dir != ''
-    shell: bash
-    working-directory: ${{ github.workspace }}/vcpkg
-    run: |
-      "${{ github.workspace }}/vcpkg/vcpkg" install --triplet ${{ inputs.triplet }} ${{ inputs.extra-args }} --x-manifest-root=${{ inputs.manifest-dir }} --x-install-root=${{ github.workspace }}/vcpkg/installed
-    env:
-      VCPKG_ROOT: "${{ github.workspace }}/vcpkg"
-  - name: vcpkg cmake configure 
-    shell: bash
-    id: vcpkg-cmake-config
-    run: |
-      echo "vcpkg-cmake-config=-DCMAKE_TOOLCHAIN_FILE=${{ github.workspace }}/vcpkg/scripts/buildsystems/vcpkg.cmake -DVCPKG_TARGET_TRIPLET=${{ inputs.triplet }} -DVCPKG_MANIFEST_MODE=OFF" >> $GITHUB_OUTPUT
-      echo "vcpkg-cache-hash=${{ hashFiles('vcpkg/vcpkg_dry_run.txt') }}-${{ inputs.cache-key }}" >> $GITHUB_OUTPUT
+    - name: Validate Inputs
+      shell: bash
+      run: |
+        if [ -n "${{ inputs.pkgs }}" ] && [ -n "${{ inputs.manifest-dir }}" ]; then
+          echo "Error: 'pkgs' and 'manifest-dir' cannot be used together."
+          exit 1
+        fi
+
+    - name: Set Common Variables
+      shell: bash
+      run: |
+        if [[ "${{ runner.os }}" == "Windows" ]]; then
+          echo "VCPKG_EXE=${{ github.workspace }}\\vcpkg\\vcpkg.exe" >> $GITHUB_ENV
+          echo "PATH_SEPARATOR=\\\\" >> $GITHUB_ENV
+        else
+          echo "VCPKG_EXE=${{ github.workspace }}/vcpkg/vcpkg" >> $GITHUB_ENV
+          echo "PATH_SEPARATOR=/" >> $GITHUB_ENV
+        fi
+        echo "VCPKG_CACHE=${{ github.workspace }}/vcpkg_cache" >> $GITHUB_ENV
+
+    - name: Get latest GitHub release
+      uses: cardinalby/git-get-release-action@v1
+      id: get-latest-vcpkg-release
+      with:
+        latest: true
+        repo: microsoft/vcpkg
+        prerelease: false
+        draft: false
+      env:
+        GITHUB_TOKEN: ${{ inputs.token }}
+
+    - name: Determine checkout tag
+      id: determine-checkout-revision
+      shell: bash
+      run: |
+        if [[ "${{ inputs.revision }}" != "" ]]; then
+          echo "vcpkg-revision=${{ inputs.revision }}" >> $GITHUB_OUTPUT
+        else
+          echo "vcpkg-revision=${{ steps.get-latest-vcpkg-release.outputs.tag_name }}" >> $GITHUB_OUTPUT
+        fi
+
+    - name: Checkout vcpkg
+      uses: actions/checkout@v3
+      with:
+        path: ${{ env.VCPKG_ROOT }}
+        repository: microsoft/vcpkg
+        ref: '${{ steps.determine-checkout-revision.outputs.vcpkg-revision }}'
+        fetch-depth: ${{ inputs.fetch-depth }}
+
+    - name: Bootstrap vcpkg
+      working-directory: ${{ env.VCPKG_ROOT }}
+      shell: bash
+      run: |
+        if [[ "${{ runner.os }}" == "Windows" ]]; then
+          cmd "/c bootstrap-vcpkg.bat"
+        else
+          ./bootstrap-vcpkg.sh
+        fi
+
+    - name: Set binary cache variable
+      if: ${{ not inputs.github-binarycache }}
+      shell: bash
+      run: |
+        echo "VCPKG_DEFAULT_BINARY_CACHE=${{ env.VCPKG_CACHE }}" >> $GITHUB_ENV
+        mkdir -p "${{ env.VCPKG_CACHE }}"
+
+    - name: vcpkg dry run
+      if: ${{ not inputs.github-binarycache }}
+      id: vcpkg-dry-run
+      working-directory: ${{ env.VCPKG_ROOT }}
+      shell: bash
+      run: |
+        if [[ "${{ inputs.manifest-dir }}" == "" ]]; then
+          "$VCPKG_EXE" install --dry-run --triplet "${{ inputs.triplet }}" ${{ inputs.extra-args }} ${{ inputs.pkgs }} | tee vcpkg_dry_run.txt
+        else
+          "$VCPKG_EXE" install --dry-run --triplet "${{ inputs.triplet }}" ${{ inputs.extra-args }} --x-manifest-root="${{ inputs.manifest-dir }}" --x-install-root="${{ env.VCPKG_ROOT }}/installed" | tee vcpkg_dry_run.txt
+        fi
+
+    - name: Cache vcpkg archives
+      if: ${{ not inputs.disable-cache && not inputs.github-binarycache }}
+      uses: actions/cache@v3
+      with:
+        path: ${{ env.VCPKG_CACHE }}
+        key: ${{ runner.os }}-${{ inputs.triplet }}-vcpkg-${{ hashFiles('vcpkg/vcpkg_dry_run.txt') }}-${{ inputs.cache-key }}
+
+    - name: Export GitHub Actions cache environment variables
+      if: ${{ not inputs.disable-cache && inputs.github-binarycache }}
+      uses: actions/github-script@v6
+      with:
+        script: |
+          core.exportVariable('ACTIONS_CACHE_URL', process.env.ACTIONS_CACHE_URL || '');
+          core.exportVariable('ACTIONS_RUNTIME_TOKEN', process.env.ACTIONS_RUNTIME_TOKEN || '');
+          core.exportVariable('VCPKG_BINARY_SOURCES', "clear;x-gha,readwrite");
+
+    - name: Build vcpkg
+      working-directory: ${{ env.VCPKG_ROOT }}
+      shell: bash
+      run: |
+        set -e
+        if [[ "${{ inputs.manifest-dir }}" == "" ]]; then
+          "$VCPKG_EXE" install --triplet "${{ inputs.triplet }}" ${{ inputs.extra-args }} ${{ inputs.pkgs }}
+        else
+          "$VCPKG_EXE" install --triplet "${{ inputs.triplet }}" ${{ inputs.extra-args }} --x-manifest-root="${{ inputs.manifest-dir }}" --x-install-root="${{ env.VCPKG_ROOT }}/installed"
+        fi
+
+    - name: vcpkg cmake configure
+      shell: bash
+      id: vcpkg-cmake-config
+      run: |
+        echo "vcpkg-cmake-config=-DCMAKE_TOOLCHAIN_FILE=${{ env.VCPKG_ROOT }}/scripts/buildsystems/vcpkg.cmake -DVCPKG_TARGET_TRIPLET=${{ inputs.triplet }} -DVCPKG_MANIFEST_MODE=OFF" >> $GITHUB_OUTPUT
+        if [[ -f "${{ env.VCPKG_ROOT }}/vcpkg_dry_run.txt" ]]; then
+          CACHE_HASH="${{ hashFiles('vcpkg/vcpkg_dry_run.txt') }}-${{ inputs.cache-key }}"
+        else
+          CACHE_HASH="${{ inputs.cache-key }}"
+        fi
+        echo "vcpkg-cache-hash=$CACHE_HASH" >> $GITHUB_OUTPUT
